@@ -15,7 +15,7 @@ TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
 
 # 固定的 MSAL 配置
 AUTHORITY = "https://login.microsoftonline.com/common"
-SCOPES = ["Files.ReadWrite.All", "offline_access"]
+SCOPES = ["Files.ReadWrite.All"]
 CACHE_FILE = "/app/data/token_cache.json"
 
 def send_tg_msg(text):
