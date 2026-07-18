@@ -100,44 +100,61 @@ def get_folder_ids(access_token, drive_id):
 def scan_and_dedupe(access_token, drive_id, folder_name, folder_id):
     print(f"\n---> 开始扫描目录: {folder_name}")
     headers = {"Authorization": f"Bearer {access_token}"}
-    url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{folder_id}/children"
     
     hash_dict = {}
     deleted_count = 0
     saved_size = 0
+    total_scanned = 0
     
-    while url:
-        res = requests.get(url, headers=headers).json()
-        if "value" not in res:
-            break
-            
-        for item in res["value"]:
-            if "file" in item:
-                hashes = item["file"].get("hashes", {})
-                file_hash = hashes.get("sha1Hash") or hashes.get("quickXorHash")
-                file_size = item.get("size", 0)
-                item_id = item["id"]
-                item_name = item["name"]
-                
-                if not file_hash:
-                    continue
-                
-                dict_key = f"{file_hash}_{file_size}"
-                
-                if dict_key in hash_dict:
-                    deleted_count += 1
-                    saved_size += file_size
-                    print(f"[发现重复] {item_name} (原文件: {hash_dict[dict_key]})")
-                    
-                    if not DRY_RUN:
-                        del_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}"
-                        requests.delete(del_url, headers=headers)
-                        print(f" -> 已移入回收站")
-                else:
-                    hash_dict[dict_key] = item_name
-
-        url = res.get("@odata.nextLink")
+    def process_folder(current_folder_id, current_path):
+        nonlocal deleted_count, saved_size, total_scanned
+        url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{current_folder_id}/children?$select=id,name,file,folder,size"
         
+        while url:
+            res = requests.get(url, headers=headers).json()
+            if "value" not in res:
+                break
+                
+            for item in res["value"]:
+                item_name = item["name"]
+                item_id = item["id"]
+                full_path = f"{current_path}/{item_name}"
+                
+                if "folder" in item:
+                    # 发现子文件夹，执行递归深入
+                    # 取消下面这行的注释，可以看它钻进了哪些文件夹
+                    # print(f"[进入目录] {full_path}")
+                    process_folder(item_id, full_path)
+                    
+                elif "file" in item:
+                    total_scanned += 1
+                    hashes = item["file"].get("hashes", {})
+                    file_hash = hashes.get("sha1Hash") or hashes.get("quickXorHash")
+                    file_size = item.get("size", 0)
+                    
+                    if not file_hash:
+                        print(f"[警告] 文件缺少 Hash 属性跳过: {full_path}")
+                        continue
+                    
+                    dict_key = f"{file_hash}_{file_size}"
+                    
+                    if dict_key in hash_dict:
+                        deleted_count += 1
+                        saved_size += file_size
+                        print(f"[发现重复] {full_path}")
+                        print(f"  -> 原文件保留: {hash_dict[dict_key]}")
+                        
+                        if not DRY_RUN:
+                            del_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}"
+                            requests.delete(del_url, headers=headers)
+                            print(f"  -> 已移入回收站")
+                    else:
+                        hash_dict[dict_key] = full_path
+
+            url = res.get("@odata.nextLink")
+
+    process_folder(folder_id, folder_name)
+    print(f"---> 目录 {folder_name} 扫描结束，共遍历了 {total_scanned} 个实体文件。")
     return deleted_count, saved_size
 
 def main():
