@@ -184,8 +184,7 @@ def main():
         msg = f"SharePoint 清理完成。\n状态: {'空跑测试' if DRY_RUN else '真实执行'}\n发现并清理: {total_count} 个文件\n释放空间: {size_mb:.2f} MB"
         print(f"\n{msg}")
         
-        if total_count > 0:
-            send_tg_msg(msg)
+        send_tg_msg(msg)
             
     except Exception as e:
         err_msg = f"去重脚本执行异常: {str(e)}"
