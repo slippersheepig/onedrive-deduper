@@ -4,11 +4,11 @@ import json
 import requests
 import msal
 
-# 配置参数 (通过环境变量传入)
 CLIENT_ID = os.getenv("CLIENT_ID")
-SHAREPOINT_HOST = os.getenv("SHAREPOINT_HOST") # 例如: contoso.sharepoint.com
-SHAREPOINT_SITE = os.getenv("SHAREPOINT_SITE", "") # 例如: /sites/CommunicationSite
-TARGET_FOLDER = os.getenv("TARGET_FOLDER", "/照片")
+SHAREPOINT_HOST = os.getenv("SHAREPOINT_HOST") 
+SHAREPOINT_SITE = os.getenv("SHAREPOINT_SITE", "") 
+# 支持逗号分隔的多文件夹，例如: "/图片,/视频"
+TARGET_FOLDERS = os.getenv("TARGET_FOLDERS", "/图片")
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
@@ -63,37 +63,42 @@ def get_access_token():
     else:
         raise Exception(f"认证失败: {result.get('error_description')}")
 
-def get_drive_and_folder(access_token):
+def get_drive_id(access_token):
     headers = {"Authorization": f"Bearer {access_token}"}
-    
-    # 动态构建基于 SharePoint 或个人 OneDrive 的 Graph API 端点
     if SHAREPOINT_HOST:
         site_path = f":{SHAREPOINT_SITE}:" if SHAREPOINT_SITE and not SHAREPOINT_SITE.startswith(":") else SHAREPOINT_SITE
         if site_path and not site_path.endswith(":"):
             site_path += ":"
         if site_path == "::" or not site_path: 
             site_path = ""
-            
         base_url = f"https://graph.microsoft.com/v1.0/sites/{SHAREPOINT_HOST}{site_path}/drive"
     else:
         base_url = "https://graph.microsoft.com/v1.0/me/drive"
         
-    # 获取 drive_id
     drive_res = requests.get(base_url, headers=headers).json()
     if "error" in drive_res:
         raise Exception(f"获取 Drive 失败: {drive_res['error']['message']}")
-    drive_id = drive_res["id"]
-    
-    # 获取 folder_id
-    folder_url = f"{base_url}/root:{TARGET_FOLDER}"
-    folder_res = requests.get(folder_url, headers=headers).json()
-    if "error" in folder_res:
-        raise Exception(f"获取目标文件夹失败: {folder_res['error']['message']}")
-    folder_id = folder_res["id"]
-    
-    return drive_id, folder_id
+    return drive_res["id"]
 
-def scan_and_dedupe(access_token, drive_id, folder_id):
+def get_folder_ids(access_token, drive_id):
+    headers = {"Authorization": f"Bearer {access_token}"}
+    folder_list = [f.strip() for f in TARGET_FOLDERS.split(",") if f.strip()]
+    folder_ids = []
+    
+    for path in folder_list:
+        if not path.startswith("/"):
+            path = "/" + path
+        folder_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:{path}"
+        res = requests.get(folder_url, headers=headers).json()
+        if "error" in res:
+            print(f"[警告] 无法获取目录 '{path}': {res['error']['message']}")
+            continue
+        folder_ids.append((path, res["id"]))
+        
+    return folder_ids
+
+def scan_and_dedupe(access_token, drive_id, folder_name, folder_id):
+    print(f"\n---> 开始扫描目录: {folder_name}")
     headers = {"Authorization": f"Bearer {access_token}"}
     url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{folder_id}/children"
     
@@ -143,16 +148,26 @@ def main():
     print(f"启动扫描... (DRY_RUN={DRY_RUN})")
     try:
         token = get_access_token()
-        drive_id, folder_id = get_drive_and_folder(token)
-        count, size = scan_and_dedupe(token, drive_id, folder_id)
+        drive_id = get_drive_id(token)
+        folders_to_scan = get_folder_ids(token, drive_id)
         
-        size_mb = size / (1024 * 1024)
-        msg = f"SharePoint/OneDrive 清理完成。
-状态: {'空跑测试' if DRY_RUN else '真实执行'}
-发现并清理: {count} 个文件
-释放空间: {size_mb:.2f} MB"
-        print(msg)
-        if count > 0:
+        if not folders_to_scan:
+            print("没有找到任何有效的目标文件夹，请检查 TARGET_FOLDERS 配置。")
+            return
+            
+        total_count = 0
+        total_size = 0
+        
+        for folder_name, folder_id in folders_to_scan:
+            count, size = scan_and_dedupe(token, drive_id, folder_name, folder_id)
+            total_count += count
+            total_size += size
+        
+        size_mb = total_size / (1024 * 1024)
+        msg = f"SharePoint 清理完成。\n状态: {'空跑测试' if DRY_RUN else '真实执行'}\n发现并清理: {total_count} 个文件\n释放空间: {size_mb:.2f} MB"
+        print(f"\n{msg}")
+        
+        if total_count > 0:
             send_tg_msg(msg)
             
     except Exception as e:
