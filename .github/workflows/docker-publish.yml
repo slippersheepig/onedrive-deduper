@@ -54,10 +54,7 @@ jobs:
             linux/386
             linux/amd64
             linux/arm64
-            linux/arm/v6
             linux/arm/v7
-            linux/s390x
-            linux/ppc64le
             linux/riscv64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
